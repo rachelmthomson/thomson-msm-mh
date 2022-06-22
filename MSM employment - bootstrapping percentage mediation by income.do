@@ -37,13 +37,13 @@ preserve // saving dataset in this form, already mi xtset - should then be usabl
 
 global tinvarlist "i.sex i.education i.bame" // time invariant confounders
 
-global tvardirectlist "dvage age2 i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 i.poverty2 equivhhincminuscosts equivhhincminuscostslag1" // time-varying confounders for direct effect
+global tvardirectlist "i.wavenum dvage age2 i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 i.poverty2 equivhhincminuscosts equivhhincminuscostslag1" // time-varying confounders for direct effect
 
-global tvartotallist "dvage age2 i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 equivhhincminuscostslag1" // time-varying confounders for total effect
+global tvartotallist "i.wavenum dvage age2 i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 equivhhincminuscostslag1" // time-varying confounders for total effect
 
-global tvardirectsenslist "dvage age2 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 i.poverty2 equivhhincminuscosts equivhhincminuscostslag1" // time-varying confounders for direct effect excluding lagged employment
+global tvardirectsenslist "i.wavenum dvage age2 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 i.poverty2 equivhhincminuscosts equivhhincminuscostslag1" // time-varying confounders for direct effect excluding lagged employment
 
-global tvartotalsenslist "dvage age2 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 equivhhincminuscostslag1" // time-varying confounders for total effect excluding lagged employment
+global tvartotalsenslist "i.wavenum dvage age2 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1 equivhhincminuscostslag1" // time-varying confounders for total effect excluding lagged employment
 
 *Creating programs for each analysis
 
@@ -55,7 +55,7 @@ qui gen double ipw0 = .
 qui gen double ipw1 = .
 
 forvalues i = 1/20 {
-	qui logit employ i.wavenum $tinvarlist $tvardirectlist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	qui logit employ $tinvarlist $tvardirectlist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
 	qui predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
 	qui replace ipw0 = 0.employ/(1-ps) if _mi_m == `i' & incCC == 1 
 	qui replace ipw1 = 1.employ/ps if _mi_m == `i' & incCC == 1 
@@ -85,7 +85,7 @@ qui gen double ipw0 = .
 qui gen double ipw1 = .
 
 forvalues i = 1/20 {
-	qui logit employ i.wavenum $tinvarlist $tvartotallist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	qui logit employ $tinvarlist $tvartotallist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
 	qui predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
 	qui replace ipw0 = 0.employ/(1-ps) if _mi_m == `i' & incCC == 1 
 	qui replace ipw1 = 1.employ/ps if _mi_m == `i' & incCC == 1 
@@ -122,7 +122,7 @@ qui gen double ipw0 = .
 qui gen double ipw1 = .
 
 forvalues i = 1/20 {
-	qui logit employ i.wavenum $tinvarlist $tvardirectsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	qui logit employ $tinvarlist $tvardirectsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
 	qui predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
 	qui replace ipw0 = 0.employ/(1-ps) if _mi_m == `i' & incCC == 1 
 	qui replace ipw1 = 1.employ/ps if _mi_m == `i' & incCC == 1 
@@ -152,7 +152,7 @@ qui gen double ipw0 = .
 qui gen double ipw1 = .
 
 forvalues i = 1/20 {
-	qui logit employ i.wavenum $tinvarlist $tvartotalsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	qui logit employ $tinvarlist $tvartotalsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
 	qui predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
 	qui replace ipw0 = 0.employ/(1-ps) if _mi_m == `i' & incCC == 1 
 	qui replace ipw1 = 1.employ/ps if _mi_m == `i' & incCC == 1 
@@ -188,7 +188,7 @@ display "Direct effect"
 qui gen double ipw0 = .
 qui gen double ipw1 = .
 
-qui logit employ i.wavenum $tinvarlist $tvardirectlist if incCC == 1, nolog cluster(pidp) // propensity score model for exposure
+qui logit employ $tinvarlist $tvardirectlist if incCC == 1, nolog cluster(pidp) // propensity score model for exposure
 qui predict double ps if incCC == 1 // propensity score prediction
 qui replace ipw0 = 0.employ/(1-ps) if incCC == 1 
 qui replace ipw1 = 1.employ/ps if incCC == 1 
@@ -214,7 +214,7 @@ display "Total effect"
 qui gen double ipw0 = .
 qui gen double ipw1 = .
 
-qui logit employ i.wavenum $tinvarlist $tvartotallist if incCC == 1, nolog cluster(pidp) // propensity score model for exposure
+qui logit employ $tinvarlist $tvartotallist if incCC == 1, nolog cluster(pidp) // propensity score model for exposure
 qui predict double ps if incCC == 1 // propensity score prediction
 qui replace ipw0 = 0.employ/(1-ps) if incCC == 1 
 qui replace ipw1 = 1.employ/ps if incCC == 1 
