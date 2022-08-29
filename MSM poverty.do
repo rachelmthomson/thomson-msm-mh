@@ -6,22 +6,6 @@ display "$filepath"
 
 log using "", replace // enter desired log name here
 
-*NOTES*
-*******
-
-/* 
-Code for replication of IPTWs used in teffects command obtained from Statalist forum
-https://www.statalist.org/forums/forum/general-stata-discussion/general/1419349-obtaining-weighted-means-and-sds-using-tebalance-summarize-after-teffects-ipw
-Appears to be correct based on comparisons and generates plausible value for weighted total prevalence
-*/
-
-/* To calculate PAF:
-1. First need PAR i.e. prevalence in whole population minus prevalence in unexposed
-2. Can get unexposed prevalence from ipw output
-3. Need to run simple proportion command to get prevalence in whole population
-4. Once have PAR, divide by total prevalence to get PAF
-*/
-
 *Setting up and general descriptives*
 *************************************
 
@@ -37,9 +21,9 @@ preserve // saving dataset in this form, already mi xtset - should then be usabl
 
 global tinvarlist "i.sex i.education i.bame" // time invariant confounders
 
-global tvarlist "dvage age2 i.employ i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1" // time-varying confounders
+global tvarlist "i.wavenum dvage age2 i.employ i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1 i.poverty2lag1" // time-varying confounders
 
-global tvarsenslist "dvage age2 i.employ i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1" // time-varying confounders excluding lagged poverty
+global tvarsenslist "i.wavenum dvage age2 i.employ i.employlag1 nchild_dvlag1 i.partneredlag1 i.benstatuslag1 i.home_ownerlag1 i.gor_dvlag1 i.ghqcaselag1 sf12pcs_dvlag1 sf12mcs_dvlag1" // time-varying confounders excluding lagged poverty
 
 *Creating programs for each analysis
 
@@ -65,30 +49,40 @@ mimrgns, dydx(poverty2) predict(default) esampvaryok
 display "*CAUSAL ESTIMATES*"
 display "******************"
 
-display "Average treatment effect"
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, vce (cluster pidp)
+display "Generating weights"
+
+qui gen double ipw0 = .
+qui gen double ipw1 = .
+
+forvalues i = 0/20 {
+	qui logit poverty2 $tinvarlist $tvarlist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
+	replace ipw0 = 0.poverty2/(1-ps) if _mi_m == `i' & incCC == 1 
+	replace ipw1 = 1.poverty2/ps if _mi_m == `i' & incCC == 1 
+	drop ps
+}
+
+qui gen double ipw=. 
+qui replace ipw = ipw1 if poverty2==1 // Sampling weights for the treated group
+qui replace ipw = ipw0 if poverty2==0 // Sampling weights for the non - treated group
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
 
 display "Odds ratio"
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, pomeans vce (cluster pidp)
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarlist if incCC == 1 [ pw = ipw ], cluster(pidp) 
 
-display "Running without mi estimate for confounder balance and PAF"
-teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+display "Average treatment effect"
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
-display "*CONFOUNDER BALANCE AND PAF*"
-display "****************************"
+display "Prevalence"
+mimrgns poverty2, predict(default) esampvaryok
 
-local unexpprev = r(table)[1,2] // need to extract this before anything else
+display "PAF"
+local unexpprev = r(table)[1,1]
 display "Prevalence in unexposed:  " `unexpprev'
-
-tebalance summarize // shows confounder balance
-
-predict double ps, ps tlevel(1) // generating propensity score for exposure
-gen double ipw = 1.poverty2/ps + 0.poverty2/(1-ps) // generating inverse probability weight
-
-sum ipw, mean // normalising weights
-qui replace ipw = ipw/r(mean)
 
 prop ghqcase if incCC == 1 & _mi_m > 0 [pw = ipw]
 local totprev = r(table)[1,2]
@@ -100,21 +94,17 @@ display `PAR'
 display "PAF:"
 display `PAR'/`totprev'
 
+display "Confounder balance"
+
+teffects ipw (ghqcase) (poverty2 $tinvarlist $tvarlist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+tebalance summarize // shows confounder balance
+
 end
 
 program define analysesens // program for analysis excluding lagged poverty variable for use with transition exposure variable
 
 display "*TRADITIONAL REGRESSION ESTIMATES*"
 display "**********************************"
-
-display "LOGISTIC, UNWEIGHTED:"
-mi estimate, or esampvaryok: logistic ghqcase i.poverty2 if incCC == 1, cluster(pidp)
-mimrgns, dydx(poverty2) predict(default) esampvaryok
-
-display "FIXED-EFFECTS, UNWEIGHTED:"
-mi xtset pidp wavenum
-mi estimate, or esampvaryok: xtlogit ghqcase i.poverty2 if incCC == 1, fe
-mimrgns, dydx(poverty2) predict(default) esampvaryok
 
 display "FIXED-EFFECTS, UNWEIGHTED but with time-varying confounders:"
 mi xtset pidp wavenum
@@ -124,30 +114,40 @@ mimrgns, dydx(poverty2) predict(default) esampvaryok
 display "*CAUSAL ESTIMATES*"
 display "******************"
 
-display "Average treatment effect"
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1, vce (cluster pidp)
+display "Generating weights"
+
+qui gen double ipw0 = .
+qui gen double ipw1 = .
+
+forvalues i = 0/20 {
+	qui logit poverty2 $tinvarlist $tvarsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
+	replace ipw0 = 0.poverty2/(1-ps) if _mi_m == `i' & incCC == 1 
+	replace ipw1 = 1.poverty2/ps if _mi_m == `i' & incCC == 1 
+	drop ps
+}
+
+qui gen double ipw=. 
+qui replace ipw = ipw1 if poverty2==1 // Sampling weights for the treated group
+qui replace ipw = ipw0 if poverty2==0 // Sampling weights for the non - treated group
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
 
 display "Odds ratio"
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1, pomeans vce (cluster pidp)
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarsenslist if incCC == 1 [ pw = ipw ], cluster(pidp) 
 
-display "Running without mi estimate for confounder balance and PAF"
-teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+display "Average treatment effect"
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
-display "*CONFOUNDER BALANCE AND PAF*"
-display "****************************"
+display "Prevalence"
+mimrgns poverty2, predict(default) esampvaryok
 
-local unexpprev = r(table)[1,2] // need to extract this before anything else
+display "PAF"
+local unexpprev = r(table)[1,1]
 display "Prevalence in unexposed:  " `unexpprev'
-
-tebalance summarize // shows confounder balance
-
-predict double ps, ps tlevel(1) // generating propensity score for exposure
-gen double ipw = 1.poverty2/ps + 0.poverty2/(1-ps) // generating inverse probability weight
-
-sum ipw, mean // normalising weights
-qui replace ipw = ipw/r(mean)
 
 prop ghqcase if incCC == 1 & _mi_m > 0 [pw = ipw]
 local totprev = r(table)[1,2]
@@ -158,6 +158,11 @@ display `PAR'
 
 display "PAF:"
 display `PAR'/`totprev'
+
+display "Confounder balance"
+
+teffects ipw (ghqcase) (poverty2 $tinvarlist $tvarsenslist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+tebalance summarize // shows confounder balance - can't think of faster way to do this
 
 end
 
@@ -206,18 +211,47 @@ mi estimate, or esampvaryok: svy: clogit ghqcase i.poverty2 $tvarlist if incCC =
 mimrgns, dydx(poverty2) predict(default) esampvaryok
 
 *Causal estimate, logistic - no use of survey weights
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, vce (cluster pidp)
 
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, pomeans vce (cluster pidp)
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+qui gen double ipw0 = .
+qui gen double ipw1 = .
+
+forvalues i = 0/20 {
+	qui logit poverty2 $tinvarlist $tvarlist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
+	replace ipw0 = 0.poverty2/(1-ps) if _mi_m == `i' & incCC == 1 
+	replace ipw1 = 1.poverty2/ps if _mi_m == `i' & incCC == 1 
+	drop ps
+}
+
+qui gen double ipw=. 
+qui replace ipw = ipw1 if poverty2==1 // Sampling weights for the treated group
+qui replace ipw = ipw0 if poverty2==0 // Sampling weights for the non - treated group
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
+
+*Odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarlist if incCC == 1 [ pw = ipw ], cluster(pidp) 
+
+*Average treatment effect
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
 *Causal estimate, logistic - survey weights multiplied in
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1 [pweight = lweight], vce (cluster pidp) 
 
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1 [pweight = lweight], pomeans vce (cluster pidp) 
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+replace ipw = ipw * lweight
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
+
+*Odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarlist if incCC == 1 [ pw = ipw ], cluster(pidp) 
+
+*Average treatment effect
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
 *************************************************
 *********************MEN ONLY********************
@@ -294,33 +328,40 @@ preserve
 
 replace incCC = 0 if education != 2 
 
-*CAUSAL ESTIMATES*
-******************
+display "Generating weights"
 
-display "Average treatment effect"
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, vce (cluster pidp)
+qui gen double ipw0 = .
+qui gen double ipw1 = .
+
+forvalues i = 0/20 {
+	qui logit poverty2 $tinvarlist $tvarlist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
+	replace ipw0 = 0.poverty2/(1-ps) if _mi_m == `i' & incCC == 1 
+	replace ipw1 = 1.poverty2/ps if _mi_m == `i' & incCC == 1 
+	drop ps
+}
+
+qui gen double ipw=. 
+qui replace ipw = ipw1 if poverty2==1 // Sampling weights for the treated group
+qui replace ipw = ipw0 if poverty2==0 // Sampling weights for the non - treated group
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
 
 display "Odds ratio"
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1, pomeans vce (cluster pidp)
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarlist if incCC == 1 [ pw = ipw ], cluster(pidp) 
 
-display "Running without mi estimate for confounder balance and PAF"
-teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarlist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+display "Average treatment effect"
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
-*CONFOUNDER BALANCE AND PAF*
-****************************
+display "Prevalence"
+mimrgns poverty2, predict(default) esampvaryok
 
-local unexpprev = r(table)[1,2] // need to extract this before anything else
+display "PAF"
+local unexpprev = r(table)[1,1]
 display "Prevalence in unexposed:  " `unexpprev'
-
-tebalance summarize // shows confounder balance
-
-predict double ps, ps tlevel(1) // generating propensity score for exposure
-gen double ipw = 1.poverty2/ps + 0.poverty2/(1-ps) // generating inverse probability weight
-
-sum ipw, mean // normalising weights
-qui replace ipw = ipw/r(mean)
 
 prop ghqcase if incCC == 1 & _mi_m > 0 [pw = ipw]
 local totprev = r(table)[1,2]
@@ -329,8 +370,13 @@ display `totprev'
 local PAR = `totprev' - `unexpprev'
 display `PAR'
 
-*PAF:
+display "PAF:"
 display `PAR'/`totprev'
+
+display "Confounder balance"
+
+teffects ipw (ghqcase) (poverty2 $tinvarlist $tvarlist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+tebalance summarize // shows confounder balance
 
 *****************************************************************
 *************************LOW EDUCATION***************************
@@ -429,30 +475,40 @@ replace incCC = 0 if missing(poverty2)
 *CAUSAL ESTIMATES*
 ******************
 
-display "Average treatment effect"
-mi estimate, esampvaryok cmdok: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1, vce (cluster pidp)
+display "Generating weights"
+
+qui gen double ipw0 = .
+qui gen double ipw1 = .
+
+forvalues i = 0/20 {
+	qui logit poverty2 $tinvarlist $tvarsenslist if incCC == 1 & _mi_m == `i', nolog cluster(pidp) // propensity score model for exposure
+	predict double ps if _mi_m == `i' & incCC == 1 // propensity score prediction
+	replace ipw0 = 0.poverty2/(1-ps) if _mi_m == `i' & incCC == 1 
+	replace ipw1 = 1.poverty2/ps if _mi_m == `i' & incCC == 1 
+	drop ps
+}
+
+qui gen double ipw=. 
+qui replace ipw = ipw1 if poverty2==1 // Sampling weights for the treated group
+qui replace ipw = ipw0 if poverty2==0 // Sampling weights for the non - treated group
+
+forvalues i = 0/20 {
+	qui sum ipw if _mi_m == `i'
+	qui replace ipw = ipw/r(mean) if _mi_m == `i'
+} // normalising weights
 
 display "Odds ratio"
-qui mi estimate, esampvaryok cmdok post: teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1, pomeans vce (cluster pidp)
-qui matrix list e(b) // have a look at the matrix of estimated coefficients and note the required label.
-nlcom (_b[POmeans:1.poverty2]/(1-_b[POmeans:1.poverty2])) / (_b[POmeans:0.poverty2]/(1-_b[POmeans:0.poverty2])) // odds ratio
+mi estimate, esampvaryok cmdok or post: logistic ghqcase i.poverty2 $tinvarlist $tvarsenslist if incCC == 1 [ pw = ipw ], cluster(pidp) 
 
-display "Running without mi estimate for confounder balance and PAF"
-teffects ipwra (ghqcase $tinvarlist, logit) (poverty2 i.wavenum $tinvarlist $tvarsenslist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+display "Average treatment effect"
+mimrgns, dydx(poverty2) predict(default) esampvaryok 
 
-*CONFOUNDER BALANCE AND PAF*
-****************************
+display "Prevalence"
+mimrgns poverty2, predict(default) esampvaryok
 
-local unexpprev = r(table)[1,2] // need to extract this before anything else
+display "PAF"
+local unexpprev = r(table)[1,1]
 display "Prevalence in unexposed:  " `unexpprev'
-
-tebalance summarize // shows confounder balance
-
-predict double ps, ps tlevel(1) // generating propensity score for exposure
-gen double ipw = 1.poverty2/ps + 0.poverty2/(1-ps) // generating inverse probability weight
-
-sum ipw, mean // normalising weights
-qui replace ipw = ipw/r(mean)
 
 prop ghqcase if incCC == 1 & _mi_m > 0 [pw = ipw]
 local totprev = r(table)[1,2]
@@ -461,8 +517,13 @@ display `totprev'
 local PAR = `totprev' - `unexpprev'
 display `PAR'
 
-*PAF:
+display "PAF:"
 display `PAR'/`totprev'
+
+display "Confounder balance"
+
+teffects ipw (ghqcase) (poverty2 $tinvarlist $tvarsenslist, logit) if incCC == 1 & _mi_m > 0, vce (cluster pidp)
+tebalance summarize // shows confounder balance
 
 *****************************************************************
 ********************COMPLETE CASE ANALYSIS***********************
